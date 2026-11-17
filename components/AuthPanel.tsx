@@ -1,7 +1,16 @@
 'use client';
 import { useState, type FormEvent } from 'react';
 import { useAuth } from '@/lib/AuthProvider';
-import { authErrorMessage, guestLogin, login, logout, register } from '@/lib/authActions';
+import {
+  GoogleAccountExistsError,
+  authErrorMessage,
+  googleLogin,
+  guestLogin,
+  login,
+  logout,
+  register,
+  signInWithGoogleCredential,
+} from '@/lib/authActions';
 import { useCheatSession } from '@/lib/cheatSession';
 import Avatar from './Avatar';
 
@@ -46,11 +55,42 @@ export default function AuthPanel() {
     }
   };
 
+  const google = async () => {
+    setErr('');
+    setBusy(true);
+    try {
+      await googleLogin(); // вызывается прямо из клика — попап не блокируется
+      refresh();
+    } catch (x) {
+      if (x instanceof GoogleAccountExistsError) {
+        const ok = window.confirm(
+          'Этот Google-аккаунт уже используется. Войти в него? Партии текущего гостя не перенесутся.',
+        );
+        if (ok) {
+          try {
+            await signInWithGoogleCredential(x.credential);
+            refresh();
+          } catch (y) {
+            setErr(authErrorMessage(y));
+          }
+        }
+      } else {
+        setErr(authErrorMessage(x)); // '' при закрытии окна — ничего не показываем
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="card">
       {isAnonymous && (
-        <p className="muted">Вы играете как гость. «Регистрация» привяжет email к этому аккаунту — партии сохранятся.</p>
+        <p className="muted">
+          Вы играете как гость. Регистрация или вход через Google привяжут аккаунт к вашему профилю — партии сохранятся.
+        </p>
       )}
+      <button className="btn" disabled={busy} onClick={google}>Войти через Google</button>
+      <p className="muted" style={{ textAlign: 'center' }}>или по email</p>
       <div className="row">
         <button className={`btn ${mode === 'login' ? '' : 'ghost'}`} onClick={() => setMode('login')}>Вход</button>
         <button className={`btn ${mode === 'register' ? '' : 'ghost'}`} onClick={() => setMode('register')}>Регистрация</button>
@@ -64,6 +104,7 @@ export default function AuthPanel() {
         {err && <div className="err">{err}</div>}
         <button className="btn" disabled={busy}>{mode === 'register' ? 'Создать аккаунт' : 'Войти'}</button>
       </form>
+      {err && <div className="err">{err}</div>}
       {!user && (
         <button className="btn ghost" onClick={() => guestLogin().catch(() => setErr('Не удалось войти как гость.'))}>
           Играть без аккаунта
