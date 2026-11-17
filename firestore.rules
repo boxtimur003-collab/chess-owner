@@ -4,7 +4,7 @@ service cloud.firestore {
 
     function signedIn() { return request.auth != null; }
     // ВАЖНО: замените на UID супер-овнера (Firebase Console → Authentication → Users).
-    function isSuper() { return signedIn() && request.auth.uid == 'REPLACE_WITH_SUPER_OWNER_UID'; }
+    function isSuper() { return signedIn() && request.auth.uid == 'FWiP3Az8TSaJlDMVPi0HilsN6Nv1'; }
     function str(v, max) { return v is string && v.size() > 0 && v.size() <= max; }
 
     // ── Профили. Читать можно только по точному id (list запрещён → нельзя перебрать пользователей).
