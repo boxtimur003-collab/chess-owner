@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    // ВАЖНО: замените на UID супер-овнера (Firebase Console → Authentication → Users).
+    function isSuper() { return signedIn() && request.auth.uid == 'REPLACE_WITH_SUPER_OWNER_UID'; }
+    function str(v, max) { return v is string && v.size() > 0 && v.size() <= max; }
+
+    // ── Профили. Читать можно только по точному id (list запрещён → нельзя перебрать пользователей).
+    match /users/{uid} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'friendCode', 'createdAt'])
+        && request.resource.data.keys().hasAll(['name', 'friendCode', 'createdAt'])
+        && str(request.resource.data.name, 30)
+        && request.resource.data.friendCode is string && request.resource.data.friendCode.size() == 8
+        && request.resource.data.createdAt is number;
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'friendCode', 'createdAt'])
+        && request.resource.data.friendCode == resource.data.friendCode
+        && request.resource.data.createdAt == resource.data.createdAt
+        && str(request.resource.data.name, 30);
+      allow delete: if false;
+
+      // Список друзей — только владелец, list только с limit <= 20.
+      match /friends/{fid} {
+        allow get: if signedIn() && request.auth.uid == uid;
+        allow list: if signedIn() && request.auth.uid == uid && request.query.limit <= 20;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['name', 'addedAt'])
+          && str(request.resource.data.name, 30)
+          && request.resource.data.addedAt is number;
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
+    }
+
+    // ── Коды друзей: поиск только по точному коду (get), create один раз (update/delete запрещены).
+    match /friendCodes/{code} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ── Партии: id = секретный код приглашения (8 символов).
+    match /games/{id} {
+      allow get: if signedIn();
+
+      // list: либо мои партии (array-contains players), либо приглашения мне; всегда limit <= 20.
+      allow list: if signedIn() && request.query.limit <= 20 && request.auth.uid in resource.data.players;
+      allow list: if signedIn() && request.query.limit <= 20 && resource.data.invited == request.auth.uid;
+
+      allow create: if signedIn()
+        && id.matches('[A-HJ-NP-Z2-9]{8}')
+        && request.resource.data.keys().hasOnly(['white', 'black', 'players', 'invited', 'fen', 'turn', 'status', 'lastMove', 'moveCount', 'createdAt'])
+        && request.resource.data.white == request.auth.uid
+        && request.resource.data.black == null
+        && request.resource.data.players == [request.auth.uid]
+        && (request.resource.data.invited == null || str(request.resource.data.invited, 128))
+        && request.resource.data.status == 'waiting'
+        && request.resource.data.turn == 'w'
+        && request.resource.data.moveCount == 0
+        && request.resource.data.lastMove == null
+        && request.resource.data.fen is string && request.resource.data.fen.size() < 100
+        && request.resource.data.createdAt is number;
+
+      allow update: if signedIn() && (
+        // 1) присоединение вторым игроком (код знает только приглашённый)
+        (resource.data.status == 'waiting' && resource.data.black == null
+          && request.auth.uid != resource.data.white
+          && request.resource.data.black == request.auth.uid
+          && request.resource.data.players == [resource.data.white, request.auth.uid]
+          && request.resource.data.status == 'playing'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['black', 'players', 'status']))
+        ||
+        // 2) ход — только та сторона, чья очередь; только разрешённые поля; moveCount строго +1
+        (resource.data.status == 'playing'
+          && ((resource.data.turn == 'w' && request.auth.uid == resource.data.white)
+           || (resource.data.turn == 'b' && request.auth.uid == resource.data.black))
+          && request.resource.data.moveCount == resource.data.moveCount + 1
+          && request.resource.data.turn in ['w', 'b'] && request.resource.data.turn != resource.data.turn
+          && request.resource.data.fen is string && request.resource.data.fen.size() < 100
+          && request.resource.data.lastMove.keys().hasOnly(['from', 'to', 'promotion'])
+          && request.resource.data.status in ['playing', 'finished']
+          && (request.resource.data.status == 'playing' || request.resource.data.result in ['1-0', '0-1', '1/2'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fen', 'turn', 'lastMove', 'moveCount', 'status', 'result']))
+        ||
+        // 3) сдача: игрок может записать только поражение себе
+        (resource.data.status == 'playing' && request.auth.uid in resource.data.players
+          && request.resource.data.status == 'finished'
+          && request.resource.data.result == (request.auth.uid == resource.data.white ? '0-1' : '1-0')
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'result']))
+      );
+      allow delete: if false;
+    }
+
+    // ── Овнеры: читает только супер-овнер; пишет ТОЛЬКО Admin SDK (он обходит Rules, клиенту — запрет).
+    match /owners/{uid} {
+      allow get: if isSuper();
+      allow list: if isSuper() && request.query.limit <= 50;
+      allow write: if false;
+    }
+  }
+}
